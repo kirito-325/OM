@@ -42,6 +42,7 @@ sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'scr'))
 
 from agent import tcm_sydrom_agent
 from agent import tcm_diagnosis_agent
+from agent import tcm_treatment_agent
 
 def main():
     # 测试用例
@@ -69,8 +70,17 @@ def main():
     print("=" * 50)
     print(json.dumps(diagnosis, ensure_ascii=False, indent=2))
 
-    # 合并输出
-    output = {**symptoms, **diagnosis}
+    # 3. 调用给方智能体（基于症状与诊断）
+    print("\n" + "=" * 50)
+    print("开始给方（处方生成）流程...")
+    print("=" * 50)
+    treatment_result = tcm_treatment_agent(symptoms, diagnosis)
+
+    print("\n处方生成结果（结构化）：")
+    print(str(treatment_result))
+
+    # 合并输出（症状、诊断、处方）并返回
+    output = {"symptoms": symptoms, "diagnosis": diagnosis, "treatment": treatment_result}
     return output
 
 

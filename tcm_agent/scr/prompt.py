@@ -140,20 +140,20 @@ TREATMENT_REACT_SYSTEM_PROMPT = """你是资深中医临床处方专家。你的
 3) "action_input": 动作所需输入（JSON 对象）。
 
 可用动作：
-- determine_principle: 根据辨病与症状确定治则/治法，返回 {"tcm_treatment_principle":"..."}
-- select_base_formula: 推荐一个基础方，返回 {"base_formula": {"name":"","source":"","herbs":[...]}}
-- propose_modifications: 针对基础方提出加减，返回 {"modifications": [{"herb":"...","reason":"..."}, ...]}
-- determine_dosage: 为最终药物给出用量与煎服，返回 {"dosage": [{"herb":"...","dose":"...g"}], "useway":"..."}
+- determine_principle: 根据辨病与症状确定治则/治法，返回 {{"tcm_treatment_principle":"..."}}
+- select_base_formula: 推荐一个基础方，返回 {{"base_formula": {{"name":"","source":"","herbs":[...]}}}}
+- propose_modifications: 针对基础方提出加减，返回 {{"modifications": [{{"herb":"...","reason":"..."}}, ...]}}
+- determine_dosage: 为最终药物给出用量与煎服，返回 {{"dosage": [{{"herb":"...","dose":"...g"}}], "useway":"..."}}
 - finish: 表示流程结束，action_input 可包含最终处方摘要
 
 每次只执行一个动作，动作由环境（agent）执行并把结果作为 "observation" 反馈给你，随后你继续下一步思考并选择下一个动作或 `finish`。
 
 返回示例：
-{
+{{
   "thought": "根据患者阴虚内热，首要滋阴清热，同时通络止痛",
   "action": "determine_principle",
-  "action_input": {}
-}
+  "action_input": {{}}
+}}
 
 只返回严格的 JSON 对象，不要额外的说明文本。"""
 
@@ -162,26 +162,90 @@ TREATMENT_DETERMINE_PRINCIPLE_PROMPT = """根据以下信息确定中医治则/�
 辨病信息：{tcm_diagnosis}
 病人主要症状：{symptoms}
 
-返回格式：{"tcm_treatment_principle": "...", "think": "简短推理"}
+返回格式：{{"tcm_treatment_principle": "...", "think": "简短推理"}}
 只返回 JSON 对象。"""
 
 
-TREATMENT_SELECT_BASE_PROMPT = """根据辨病/治则以及病人症状推荐一个基础方（name, source, herbs list），并说明选择理由。\n
+TREATMENT_SELECT_BASE_PROMPT = """根据辨病/治则以及病人症状推荐一个基础方（name, source, herbs list），并说明选择理由。
 输入：{context}
 
-返回格式：{"base_formula": {"name":"","source":"","herbs":[...]}, "think":"..."}
+返回格式：{{"base_formula": {{"name":"","source":"","herbs":[...]}}, "think":"..."}}
 只返回 JSON 对象。"""
 
 
 TREATMENT_PROPOSE_MODIFICATIONS_PROMPT = """根据下列病人症状与基础方，提出需要增减的草药并说明理由。
 输入：{context}
 
-返回格式：{"modifications":[{"herb":"...","reason":"..."}, ...], "think":"..."}
+返回格式：{{"modifications":[{{"herb":"...","reason":"..."}}, ...], "think":"..."}}
 只返回 JSON 对象。"""
 
 
 TREATMENT_DETERMINE_DOSAGE_PROMPT = """为给定的药物列表提供建议用量（以 g 为单位）及煎服方法。
 输入：{context}
 
-返回格式：{"dosage":[{"herb":"...","dose":"...g"}, ...], "useway":"煎服方法说明", "think":"..."}
+返回格式：{{"dosage":[{{"herb":"...","dose":"...g"}}, ...], "useway":"煎服方法说明", "think":"..."}}
 只返回 JSON 对象。"""
+
+
+# ==================== Chain-of-Thought (CoT) 指导提示词 ====================
+TREATMENT_COT_PROMPT = """你是资深中医临床处方专家。请严格按以下链式步骤（Chain-of-Thought，CoT）执行处方制定，并在每一步只返回严格的 JSON：
+步骤：
+1) 先确定治法/治则（determine_principle），输出键为 {{"tcm_treatment_principle":"...","think":"..."}}
+2) 在明确治法后推荐一个基础方（select_base_formula），输出键为 {{"base_formula":{{"name":"","source":"","herbs":[...]}},"think":"..."}}
+3) 针对基础方提出加减（propose_modifications），输出键为 {{"modifications":[{{"herb":"...","reason":"..."}}, ...],"think":"..."}}
+4) 确定加减后给出最终用量与煎服（determine_dosage），输出键为 {{"dosage":[{{"herb":"...","dose":"...g"}},...],"useway":"...","think":"..."}}
+5) 最后汇总并用最终标准 JSON 输出处方（finish），格式请参照主服务要求（包含 tcm_diagnosis, treatment_principle, base_formula, final_prescription, useway, warnings）。
+
+注意：每一步必须只返回 JSON，不要带任何解释性文字；在 ReAct 流程中，每个动作只做一件事。
+"""
+
+
+# ==================== 输出控制/安全检查提示词 ====================
+OUTPUT_CONTROL_SYSTEM_PROMPT = """你是一个负责中药处方安全与质量控制的专家系统。你的任务是：
+1) 根据"十八反"和"十九畏"规则检查处方中的明显配伍禁忌
+2) 如果发现存在明显不合理组合，建议调整方案（propose_modifications）并返回用药警告
+3) 对最终处方做质量检查，确保返回的结构严格符合要求
+
+输出必须为 JSON，格式详见 USER_PROMPT。只返回 JSON 对象，不要任何多余文本。"""
+
+OUTPUT_CONTROL_USER_PROMPT = """请对以下处方进行安全校验：
+
+处方输入：
+{prescription}
+
+规则：以"十八反、十九畏"为检核要点（若需要，你可以调用你的医学知识库来判断），同时检查剂量、毒性药物（如含乌头类）、孕妇禁忌等重要安全提示。
+
+请返回 JSON：
+{{
+  "has_contraindication": true/false,
+  "contraindications": ["描述1", ...],
+  "proposed_modifications": [ {{"herb":"...","action":"remove/replace/reduce","reason":"...","suggestion":"..."}}, ... ],
+  "warnings": ["..."],
+  "final_prescription": {{}}
+}}
+
+只返回 JSON 对象。"""
+
+
+# ==================== 最终处方格式/质量校验提示词 ====================
+TREATMENT_OUTPUT_VALIDATION_SYSTEM_PROMPT = """你是中医临床处方质量控制的系统提示：严格检查输出 JSON 是否符合 schema、语言是否清晰、剂量单位是否规范。只返回 JSON 格式的校验结果。"""
+
+TREATMENT_OUTPUT_VALIDATION_PROMPT = """你是中医临床处方质量控制专家。请检查下面的处方输出是否满足以下要求：
+1) 严格按照输出 schema 返回（见 sample）
+2) 语言需清晰、专业、剂量单位明确（g）
+3) 基础方与加减应逻辑一致、理由合理
+
+Sample schema:
+{{
+  "tcm_diagnosis": "",
+  "treatment_principle": "",
+  "base_formula": "",
+  "final_prescription": [ {{"herb":"","dose":"...g"}}, ... ],
+  "useway": "",
+  "warnings": ["..." ]
+}}
+
+输入：{output}
+
+请返回 JSON：{{"valid": true/false, "errors": ["..."], "suggestions": "..."}}
+只返回 JSON 对象，不要多余文字。"""
